@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dave Declaration Widget</title>
+    
+    <!-- Allow embedding in iframes -->
+    <meta http-equiv="X-Frame-Options" content="ALLOWALL">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            text-align: center;
+            width: 100%;
+            max-width: 600px;
+        }
+        
+        .error-message {
+            color: #dc3545;
+            font-size: 14px;
+            margin-bottom: 20px;
+            min-height: 20px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .error-message.show {
+            opacity: 1;
+        }
+        
+        .input-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        
+        .prefix, .suffix {
+            color: #000;
+            font-weight: 400;
+        }
+        
+        .name-input {
+            border: 2px solid #000;
+            background: #fff;
+            padding: 8px 16px;
+            font-size: 40px;
+            text-align: center;
+            min-width: 200px;
+            outline: none;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+        
+        .name-input:focus {
+            border-color: #000;
+            box-shadow: 0 0 0 2px rgba(0,0,0,0.1);
+        }
+        
+        .connect-button {
+            background: #000;
+            color: #fff;
+            border: none;
+            border-radius: 40px;
+            padding: 16px 48px;
+            font-size: 18px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 200px;
+            font-family: inherit;
+        }
+        
+        .connect-button:hover:not(:disabled) {
+            background: #333;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        
+        .connect-button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        
+        .connect-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .info-text {
+            color: #666;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        
+        .success-message {
+            color: #28a745;
+            font-size: 16px;
+            margin-top: 20px;
+            padding: 16px 24px;
+            background: #d4edda;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        @media (max-width: 600px) {
+            .input-wrapper {
+                font-size: 28px;
+            }
+            
+            .name-input {
+                font-size: 28px;
+                min-width: 150px;
+                padding: 6px 12px;
+            }
+            
+            .connect-button {
+                font-size: 16px;
+                padding: 14px 36px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-message" id="errorMessage"></div>
+        
+        <div class="input-wrapper">
+            <span class="prefix">i_am_</span>
+            <input 
+                type="text" 
+                class="name-input" 
+                id="nameInput" 
+                placeholder="your_name" 
+                maxlength="14"
+                autocomplete="off"
+                spellcheck="false"
+            >
+            <span class="suffix">_dave</span>
+        </div>
+        
+        <button class="connect-button" id="connectButton">CONNECT</button>
+        
+        <div class="info-text" id="infoText"></div>
+        <div class="success-message" id="successMessage"></div>
+    </div>
+
+    <!-- Ethers.js -->
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
+    
+    <script>
+        // Contract details
+        const CONTRACT_ADDRESS = '0xB0731E7ea189c169640Fd890E5dcE9811040D0eA';
+        const BASE_CHAIN_ID = '0x2105'; // 8453 in hex
+        const BASE_CHAIN_ID_DEC = 8453;
+        
+        const CONTRACT_ABI = [
+            "function cosignDeclaration(string memory chosenName) public",
+            "function hasSigned(address) public view returns (bool)",
+            "function signatureByAddress(address) public view returns (string)",
+            "function nameExists(string) public view returns (bool)",
+            "function isAllowlistActive() public view returns (bool)",
+            "function timeUntilPublic() public view returns (uint256)"
+        ];
+        
+        // State
+        let provider = null;
+        let signer = null;
+        let contract = null;
+        let connected = false;
+        let userAddress = null;
+        
+        // Elements
+        const connectButton = document.getElementById('connectButton');
+        const nameInput = document.getElementById('nameInput');
+        const errorMessage = document.getElementById('errorMessage');
+        const infoText = document.getElementById('infoText');
+        const successMessage = document.getElementById('successMessage');
+        
+        // Error handling
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+            setTimeout(() => {
+                errorMessage.classList.remove('show');
+            }, 5000);
+        }
+        
+        function clearMessages() {
+            errorMessage.classList.remove('show');
+            successMessage.style.display = 'none';
+        }
+        
+        // Network handling
+        async function switchToBase() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: BASE_CHAIN_ID }],
+                });
+                return true;
+            } catch (error) {
+                if (error.code === 4902) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: BASE_CHAIN_ID,
+                                chainName: 'Base',
+                                nativeCurrency: {
+                                    name: 'Ether',
+                                    symbol: 'ETH',
+                                    decimals: 18
+                                },
+                                rpcUrls: ['https://mainnet.base.org'],
+                                blockExplorerUrls: ['https://basescan.org/']
+                            }],
+                        });
+                        return true;
+                    } catch (addError) {
+                        console.error('Add chain error:', addError);
+                        showError('Please add Base network to your wallet');
+                        return false;
+                    }
+                } else {
+                    console.error('Switch chain error:', error);
+                    showError('Please switch to Base network');
+                    return false;
+                }
+            }
+        }
+        
+        // Connect wallet
+        async function connectWallet() {
+            try {
+                clearMessages();
+                
+                if (typeof window.ethereum === 'undefined') {
+                    showError('Please install MetaMask or another Web3 wallet');
+                    return;
+                }
+                
+                connectButton.disabled = true;
+                connectButton.innerHTML = 'CONNECTING...';
+                
+                // Request accounts
+                const accounts = await window.ethereum.request({ 
+                    method: 'eth_requestAccounts' 
+                });
+                
+                if (!accounts || accounts.length === 0) {
+                    throw new Error('No accounts found');
+                }
+                
+                // Switch to Base
+                const switched = await switchToBase();
+                if (!switched) {
+                    connectButton.disabled = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    return;
+                }
+                
+                // Setup provider
+                provider = new ethers.providers.Web3Provider(window.ethereum);
+                const network = await provider.getNetwork();
+                
+                if (network.chainId !== BASE_CHAIN_ID_DEC) {
+                    throw new Error('Wrong network');
+                }
+                
+                signer = provider.getSigner();
+                userAddress = await signer.getAddress();
+                contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+                
+                // Check if already signed
+                const hasSigned = await contract.hasSigned(userAddress);
+                if (hasSigned) {
+                    const signature = await contract.signatureByAddress(userAddress);
+                    showError(`Already signed as: ${signature}`);
+                    connectButton.disabled = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    return;
+                }
+                
+                // Success
+                connected = true;
+                connectButton.innerHTML = 'COSIGN';
+                connectButton.disabled = false;
+                infoText.textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+                
+                // Check allowlist
+                try {
+                    const isAllowlistActive = await contract.isAllowlistActive();
+                    if (isAllowlistActive) {
+                        const timeUntilPublic = await contract.timeUntilPublic();
+                        const hours = Math.floor(timeUntilPublic / 3600);
+                        const minutes = Math.floor((timeUntilPublic % 3600) / 60);
+                        if (hours > 0 || minutes > 0) {
+                            infoText.textContent += ` | Allowlist: ${hours}h ${minutes}m remaining`;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Allowlist check error:', e);
+                }
+                
+            } catch (error) {
+                console.error('Connection error:', error);
+                connectButton.disabled = false;
+                connectButton.innerHTML = 'CONNECT';
+                showError('Connection failed. Please try again.');
+            }
+        }
+        
+        // Sign declaration
+        async function signDeclaration() {
+            try {
+                clearMessages();
+                
+                const name = nameInput.value.trim().toLowerCase();
+                
+                // Validate
+                if (!name) {
+                    showError('Please enter a name');
+                    return;
+                }
+                
+                if (name.length > 14) {
+                    showError('Name cannot exceed 14 characters');
+                    return;
+                }
+                
+                if (!/^[a-z0-9-]+$/.test(name)) {
+                    showError('Only lowercase letters, numbers, and hyphens allowed');
+                    return;
+                }
+                
+                // Check if name exists
+                const fullName = `i_am_${name}_dave`;
+                const nameExists = await contract.nameExists(fullName);
+                if (nameExists) {
+                    showError('This DAVE name is already taken');
+                    return;
+                }
+                
+                // Sign
+                connectButton.disabled = true;
+                connectButton.innerHTML = 'SIGNING<span class="loading-spinner"></span>';
+                
+                const tx = await contract.cosignDeclaration(name);
+                connectButton.innerHTML = 'CONFIRMING<span class="loading-spinner"></span>';
+                
+                const receipt = await tx.wait();
+                
+                // Success
+                successMessage.textContent = `Successfully signed as: ${fullName}`;
+                successMessage.style.display = 'block';
+                nameInput.value = '';
+                connectButton.innerHTML = 'SIGNED';
+                connectButton.disabled = true;
+                
+                // Get signature number
+                const event = receipt.events?.find(e => e.event === 'DeclarationSigned');
+                if (event) {
+                    successMessage.textContent += ` | Signature #${event.args.signatureNumber}`;
+                }
+                
+            } catch (error) {
+                console.error('Sign error:', error);
+                connectButton.disabled = false;
+                connectButton.innerHTML = 'COSIGN';
+                
+                if (error.code === 'ACTION_REJECTED' || error.code === 4001) {
+                    showError('Transaction cancelled');
+                } else if (error.message?.includes('allowlisted')) {
+                    showError('Only allowlisted addresses can sign during this period');
+                } else {
+                    showError('Transaction failed. Please try again.');
+                }
+            }
+        }
+        
+        // Event handlers
+        connectButton.addEventListener('click', async () => {
+            if (!connected) {
+                await connectWallet();
+            } else {
+                await signDeclaration();
+            }
+        });
+        
+        nameInput.addEventListener('keypress', async (e) => {
+            if (e.key === 'Enter' && connected) {
+                await signDeclaration();
+            }
+        });
+        
+        // Listen for account/network changes
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', (accounts) => {
+                if (accounts.length === 0) {
+                    // Disconnected
+                    connected = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    connectButton.disabled = false;
+                    infoText.textContent = '';
+                    clearMessages();
+                } else if (connected && accounts[0].toLowerCase() !== userAddress.toLowerCase()) {
+                    // Account changed - reconnect
+                    connected = false;
+                    connectWallet();
+                }
+            });
+            
+            window.ethereum.on('chainChanged', (chainId) => {
+                if (connected && chainId !== BASE_CHAIN_ID) {
+                    showError('Please switch back to Base network');
+                    connected = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    connectButton.disabled = false;
+                }
+            });
+        }
+        
+        // Auto-focus input
+        nameInput.focus();
+    </script>
+</body>
+</html>
