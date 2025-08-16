@@ -44,20 +44,6 @@
             opacity: 1;
         }
         
-        .debug-info {
-            background: #f0f0f0;
-            padding: 10px;
-            margin: 10px 0;
-            font-size: 12px;
-            text-align: left;
-            border-radius: 4px;
-            display: none;
-        }
-        
-        .debug-info.show {
-            display: block;
-        }
-        
         .input-wrapper {
             display: flex;
             align-items: center;
@@ -174,7 +160,6 @@
 <body>
     <div class="container">
         <div class="error-message" id="errorMessage"></div>
-        <div class="debug-info" id="debugInfo"></div>
         
         <div class="input-wrapper">
             <span class="prefix">i_am_</span>
@@ -196,348 +181,329 @@
         <div class="success-message" id="successMessage"></div>
     </div>
 
-    <!-- Ethers.js -->
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
-    
     <script>
-        // Debug mode - set to false for production
-        const DEBUG = true;
+        // Load ethers.js with better error handling
+        function loadEthers(callback) {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+            script.onload = callback;
+            script.onerror = function() {
+                // Try alternative CDN
+                const altScript = document.createElement('script');
+                altScript.src = 'https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js';
+                altScript.onload = callback;
+                altScript.onerror = function() {
+                    document.getElementById('errorMessage').textContent = 'Failed to load Web3 library. Please refresh the page.';
+                    document.getElementById('errorMessage').classList.add('show');
+                };
+                document.head.appendChild(altScript);
+            };
+            document.head.appendChild(script);
+        }
         
-        // Contract details
-        const CONTRACT_ADDRESS = '0xB0731E7ea189c169640Fd890E5dcE9811040D0eA';
-        const BASE_CHAIN_ID = '0x2105'; // 8453 in hex
-        const BASE_CHAIN_ID_DEC = 8453;
-        
-        const CONTRACT_ABI = [
-            "function cosignDeclaration(string memory chosenName) public",
-            "function hasSigned(address) public view returns (bool)",
-            "function signatureByAddress(address) public view returns (string)",
-            "function nameExists(string) public view returns (bool)",
-            "function isAllowlistActive() public view returns (bool)",
-            "function timeUntilPublic() public view returns (uint256)"
-        ];
-        
-        // State
-        let provider = null;
-        let signer = null;
-        let contract = null;
-        let connected = false;
-        let userAddress = null;
-        
-        // Elements
-        const connectButton = document.getElementById('connectButton');
-        const nameInput = document.getElementById('nameInput');
-        const errorMessage = document.getElementById('errorMessage');
-        const infoText = document.getElementById('infoText');
-        const successMessage = document.getElementById('successMessage');
-        const debugInfo = document.getElementById('debugInfo');
-        
-        // Debug logging
-        function debug(message, data = null) {
-            console.log(`[Dave Widget] ${message}`, data || '');
-            if (DEBUG) {
-                debugInfo.classList.add('show');
-                debugInfo.innerHTML += `${new Date().toLocaleTimeString()}: ${message}<br>`;
-                if (data) {
-                    debugInfo.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-                }
+        // Initialize widget after ethers loads
+        loadEthers(function() {
+            console.log('[Dave Widget] Ethers loaded successfully');
+            
+            // Contract details
+            const CONTRACT_ADDRESS = '0xB0731E7ea189c169640Fd890E5dcE9811040D0eA';
+            const BASE_CHAIN_ID = '0x2105'; // 8453 in hex
+            const BASE_CHAIN_ID_DEC = 8453;
+            
+            const CONTRACT_ABI = [
+                "function cosignDeclaration(string memory chosenName) public",
+                "function hasSigned(address) public view returns (bool)",
+                "function signatureByAddress(address) public view returns (string)",
+                "function nameExists(string) public view returns (bool)",
+                "function isAllowlistActive() public view returns (bool)",
+                "function timeUntilPublic() public view returns (uint256)"
+            ];
+            
+            // State
+            let provider = null;
+            let signer = null;
+            let contract = null;
+            let connected = false;
+            let userAddress = null;
+            
+            // Elements
+            const connectButton = document.getElementById('connectButton');
+            const nameInput = document.getElementById('nameInput');
+            const errorMessage = document.getElementById('errorMessage');
+            const infoText = document.getElementById('infoText');
+            const successMessage = document.getElementById('successMessage');
+            
+            // Error handling
+            function showError(message) {
+                console.error('[Dave Widget] Error:', message);
+                errorMessage.textContent = message;
+                errorMessage.classList.add('show');
+                setTimeout(() => {
+                    errorMessage.classList.remove('show');
+                }, 7000);
             }
-        }
-        
-        // Error handling
-        function showError(message) {
-            debug(`Error: ${message}`);
-            errorMessage.textContent = message;
-            errorMessage.classList.add('show');
-            setTimeout(() => {
+            
+            function clearMessages() {
                 errorMessage.classList.remove('show');
-            }, 7000);
-        }
-        
-        function clearMessages() {
-            errorMessage.classList.remove('show');
-            successMessage.style.display = 'none';
-        }
-        
-        // Check environment
-        debug('Widget loaded');
-        debug('Ethereum available:', typeof window.ethereum !== 'undefined');
-        
-        // Connect wallet
-        async function connectWallet() {
-            try {
-                clearMessages();
-                debug('Starting connection...');
-                
-                // Check for wallet
-                if (typeof window.ethereum === 'undefined') {
-                    showError('Please install MetaMask or another Web3 wallet');
-                    return;
-                }
-                
-                connectButton.disabled = true;
-                connectButton.innerHTML = 'CONNECTING...';
-                
-                // Request accounts with error handling
-                let accounts;
+                successMessage.style.display = 'none';
+            }
+            
+            // Connect wallet
+            async function connectWallet() {
                 try {
-                    debug('Requesting accounts...');
-                    accounts = await window.ethereum.request({ 
-                        method: 'eth_requestAccounts' 
-                    });
-                    debug('Accounts received:', accounts);
-                } catch (err) {
-                    debug('Account request failed:', err);
-                    if (err.code === -32002) {
-                        showError('Please unlock MetaMask');
-                    } else if (err.code === 4001) {
-                        showError('Connection rejected');
-                    } else {
-                        showError('Failed to get accounts');
-                    }
-                    connectButton.disabled = false;
-                    connectButton.innerHTML = 'CONNECT';
-                    return;
-                }
-                
-                if (!accounts || accounts.length === 0) {
-                    throw new Error('No accounts found');
-                }
-                
-                // Get current chain
-                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                debug('Current chain:', chainId);
-                
-                // Switch to Base if needed
-                if (chainId !== BASE_CHAIN_ID) {
-                    debug('Switching to Base...');
-                    try {
-                        await window.ethereum.request({
-                            method: 'wallet_switchEthereumChain',
-                            params: [{ chainId: BASE_CHAIN_ID }],
-                        });
-                        debug('Switched to Base');
-                    } catch (switchError) {
-                        debug('Switch error:', switchError);
-                        if (switchError.code === 4902) {
-                            debug('Adding Base network...');
-                            try {
-                                await window.ethereum.request({
-                                    method: 'wallet_addEthereumChain',
-                                    params: [{
-                                        chainId: BASE_CHAIN_ID,
-                                        chainName: 'Base',
-                                        nativeCurrency: {
-                                            name: 'Ether',
-                                            symbol: 'ETH',
-                                            decimals: 18
-                                        },
-                                        rpcUrls: ['https://mainnet.base.org'],
-                                        blockExplorerUrls: ['https://basescan.org/']
-                                    }],
-                                });
-                                debug('Base network added');
-                            } catch (addError) {
-                                debug('Add network error:', addError);
-                                showError('Please add Base network to your wallet');
-                                connectButton.disabled = false;
-                                connectButton.innerHTML = 'CONNECT';
-                                return;
-                            }
-                        } else {
-                            showError('Please switch to Base network');
-                            connectButton.disabled = false;
-                            connectButton.innerHTML = 'CONNECT';
-                            return;
-                        }
-                    }
-                }
-                
-                // Setup provider
-                debug('Setting up provider...');
-                provider = new ethers.providers.Web3Provider(window.ethereum);
-                const network = await provider.getNetwork();
-                debug('Network:', network);
-                
-                if (network.chainId !== BASE_CHAIN_ID_DEC) {
-                    throw new Error('Wrong network after switch');
-                }
-                
-                signer = provider.getSigner();
-                userAddress = await signer.getAddress();
-                debug('User address:', userAddress);
-                
-                // Setup contract
-                contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-                debug('Contract initialized');
-                
-                // Check if already signed
-                try {
-                    const hasSigned = await contract.hasSigned(userAddress);
-                    debug('Has signed:', hasSigned);
+                    clearMessages();
+                    console.log('[Dave Widget] Starting connection...');
                     
-                    if (hasSigned) {
-                        const signature = await contract.signatureByAddress(userAddress);
-                        showError(`Already signed as: ${signature}`);
+                    // Check for wallet
+                    if (typeof window.ethereum === 'undefined') {
+                        showError('Please install MetaMask or another Web3 wallet');
+                        return;
+                    }
+                    
+                    connectButton.disabled = true;
+                    connectButton.innerHTML = 'CONNECTING...';
+                    
+                    // Request accounts
+                    let accounts;
+                    try {
+                        accounts = await window.ethereum.request({ 
+                            method: 'eth_requestAccounts' 
+                        });
+                        console.log('[Dave Widget] Accounts:', accounts);
+                    } catch (err) {
+                        if (err.code === -32002) {
+                            showError('Please unlock MetaMask');
+                        } else if (err.code === 4001) {
+                            showError('Connection rejected');
+                        } else {
+                            showError('Failed to get accounts');
+                        }
                         connectButton.disabled = false;
                         connectButton.innerHTML = 'CONNECT';
                         return;
                     }
-                } catch (err) {
-                    debug('Error checking signature:', err);
-                }
-                
-                // Success
-                connected = true;
-                connectButton.innerHTML = 'COSIGN';
-                connectButton.disabled = false;
-                infoText.textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
-                debug('Connection successful!');
-                
-                // Check allowlist
-                try {
-                    const isAllowlistActive = await contract.isAllowlistActive();
-                    if (isAllowlistActive) {
-                        const timeUntilPublic = await contract.timeUntilPublic();
-                        const hours = Math.floor(timeUntilPublic / 3600);
-                        const minutes = Math.floor((timeUntilPublic % 3600) / 60);
-                        if (hours > 0 || minutes > 0) {
-                            infoText.textContent += ` | Allowlist: ${hours}h ${minutes}m remaining`;
+                    
+                    if (!accounts || accounts.length === 0) {
+                        throw new Error('No accounts found');
+                    }
+                    
+                    // Get current chain
+                    const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                    console.log('[Dave Widget] Current chain:', chainId);
+                    
+                    // Switch to Base if needed
+                    if (chainId !== BASE_CHAIN_ID) {
+                        try {
+                            await window.ethereum.request({
+                                method: 'wallet_switchEthereumChain',
+                                params: [{ chainId: BASE_CHAIN_ID }],
+                            });
+                        } catch (switchError) {
+                            if (switchError.code === 4902) {
+                                try {
+                                    await window.ethereum.request({
+                                        method: 'wallet_addEthereumChain',
+                                        params: [{
+                                            chainId: BASE_CHAIN_ID,
+                                            chainName: 'Base',
+                                            nativeCurrency: {
+                                                name: 'Ether',
+                                                symbol: 'ETH',
+                                                decimals: 18
+                                            },
+                                            rpcUrls: ['https://mainnet.base.org'],
+                                            blockExplorerUrls: ['https://basescan.org/']
+                                        }],
+                                    });
+                                } catch (addError) {
+                                    showError('Please add Base network to your wallet');
+                                    connectButton.disabled = false;
+                                    connectButton.innerHTML = 'CONNECT';
+                                    return;
+                                }
+                            } else {
+                                showError('Please switch to Base network');
+                                connectButton.disabled = false;
+                                connectButton.innerHTML = 'CONNECT';
+                                return;
+                            }
                         }
                     }
-                } catch (e) {
-                    debug('Allowlist check error:', e);
-                }
-                
-            } catch (error) {
-                debug('Connection error:', error);
-                connectButton.disabled = false;
-                connectButton.innerHTML = 'CONNECT';
-                showError('Connection failed. Check console for details.');
-            }
-        }
-        
-        // Sign declaration
-        async function signDeclaration() {
-            try {
-                clearMessages();
-                debug('Starting signature process...');
-                
-                const name = nameInput.value.trim().toLowerCase();
-                
-                // Validate
-                if (!name) {
-                    showError('Please enter a name');
-                    return;
-                }
-                
-                if (name.length > 14) {
-                    showError('Name cannot exceed 14 characters');
-                    return;
-                }
-                
-                if (!/^[a-z0-9-]+$/.test(name)) {
-                    showError('Only lowercase letters, numbers, and hyphens allowed');
-                    return;
-                }
-                
-                // Check if name exists
-                const fullName = `i_am_${name}_dave`;
-                debug('Checking name availability:', fullName);
-                
-                const nameExists = await contract.nameExists(fullName);
-                if (nameExists) {
-                    showError('This DAVE name is already taken');
-                    return;
-                }
-                
-                // Sign
-                connectButton.disabled = true;
-                connectButton.innerHTML = 'SIGNING<span class="loading-spinner"></span>';
-                
-                debug('Sending transaction...');
-                const tx = await contract.cosignDeclaration(name);
-                debug('Transaction sent:', tx.hash);
-                
-                connectButton.innerHTML = 'CONFIRMING<span class="loading-spinner"></span>';
-                
-                const receipt = await tx.wait();
-                debug('Transaction confirmed:', receipt);
-                
-                // Success
-                successMessage.textContent = `Successfully signed as: ${fullName}`;
-                successMessage.style.display = 'block';
-                nameInput.value = '';
-                connectButton.innerHTML = 'SIGNED';
-                connectButton.disabled = true;
-                
-                // Get signature number
-                const event = receipt.events?.find(e => e.event === 'DeclarationSigned');
-                if (event) {
-                    successMessage.textContent += ` | Signature #${event.args.signatureNumber}`;
-                }
-                
-            } catch (error) {
-                debug('Sign error:', error);
-                connectButton.disabled = false;
-                connectButton.innerHTML = 'COSIGN';
-                
-                if (error.code === 'ACTION_REJECTED' || error.code === 4001) {
-                    showError('Transaction cancelled');
-                } else if (error.message?.includes('allowlisted')) {
-                    showError('Only allowlisted addresses can sign during this period');
-                } else {
-                    showError('Transaction failed. Check console for details.');
-                }
-            }
-        }
-        
-        // Event handlers
-        connectButton.addEventListener('click', async () => {
-            if (!connected) {
-                await connectWallet();
-            } else {
-                await signDeclaration();
-            }
-        });
-        
-        nameInput.addEventListener('keypress', async (e) => {
-            if (e.key === 'Enter' && connected) {
-                await signDeclaration();
-            }
-        });
-        
-        // Listen for account/network changes
-        if (window.ethereum) {
-            window.ethereum.on('accountsChanged', (accounts) => {
-                debug('Accounts changed:', accounts);
-                if (accounts.length === 0) {
-                    // Disconnected
-                    connected = false;
-                    connectButton.innerHTML = 'CONNECT';
+                    
+                    // Setup provider - using window.ethers
+                    provider = new window.ethers.providers.Web3Provider(window.ethereum);
+                    const network = await provider.getNetwork();
+                    console.log('[Dave Widget] Network:', network);
+                    
+                    if (network.chainId !== BASE_CHAIN_ID_DEC) {
+                        throw new Error('Wrong network after switch');
+                    }
+                    
+                    signer = provider.getSigner();
+                    userAddress = await signer.getAddress();
+                    console.log('[Dave Widget] User address:', userAddress);
+                    
+                    // Setup contract
+                    contract = new window.ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+                    
+                    // Check if already signed
+                    try {
+                        const hasSigned = await contract.hasSigned(userAddress);
+                        if (hasSigned) {
+                            const signature = await contract.signatureByAddress(userAddress);
+                            showError(`Already signed as: ${signature}`);
+                            connectButton.disabled = false;
+                            connectButton.innerHTML = 'CONNECT';
+                            return;
+                        }
+                    } catch (err) {
+                        console.error('[Dave Widget] Error checking signature:', err);
+                    }
+                    
+                    // Success
+                    connected = true;
+                    connectButton.innerHTML = 'COSIGN';
                     connectButton.disabled = false;
-                    infoText.textContent = '';
+                    infoText.textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+                    console.log('[Dave Widget] Connection successful!');
+                    
+                    // Check allowlist
+                    try {
+                        const isAllowlistActive = await contract.isAllowlistActive();
+                        if (isAllowlistActive) {
+                            const timeUntilPublic = await contract.timeUntilPublic();
+                            const hours = Math.floor(timeUntilPublic / 3600);
+                            const minutes = Math.floor((timeUntilPublic % 3600) / 60);
+                            if (hours > 0 || minutes > 0) {
+                                infoText.textContent += ` | Allowlist: ${hours}h ${minutes}m remaining`;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('[Dave Widget] Allowlist check error:', e);
+                    }
+                    
+                } catch (error) {
+                    console.error('[Dave Widget] Connection error:', error);
+                    connectButton.disabled = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    showError('Connection failed. Please try again.');
+                }
+            }
+            
+            // Sign declaration
+            async function signDeclaration() {
+                try {
                     clearMessages();
-                } else if (connected && accounts[0].toLowerCase() !== userAddress.toLowerCase()) {
-                    // Account changed - reconnect
-                    connected = false;
-                    connectWallet();
+                    
+                    const name = nameInput.value.trim().toLowerCase();
+                    
+                    // Validate
+                    if (!name) {
+                        showError('Please enter a name');
+                        return;
+                    }
+                    
+                    if (name.length > 14) {
+                        showError('Name cannot exceed 14 characters');
+                        return;
+                    }
+                    
+                    if (!/^[a-z0-9-]+$/.test(name)) {
+                        showError('Only lowercase letters, numbers, and hyphens allowed');
+                        return;
+                    }
+                    
+                    // Check if name exists
+                    const fullName = `i_am_${name}_dave`;
+                    const nameExists = await contract.nameExists(fullName);
+                    if (nameExists) {
+                        showError('This DAVE name is already taken');
+                        return;
+                    }
+                    
+                    // Sign
+                    connectButton.disabled = true;
+                    connectButton.innerHTML = 'SIGNING<span class="loading-spinner"></span>';
+                    
+                    const tx = await contract.cosignDeclaration(name);
+                    console.log('[Dave Widget] Transaction sent:', tx.hash);
+                    
+                    connectButton.innerHTML = 'CONFIRMING<span class="loading-spinner"></span>';
+                    
+                    const receipt = await tx.wait();
+                    console.log('[Dave Widget] Transaction confirmed');
+                    
+                    // Success
+                    successMessage.textContent = `Successfully signed as: ${fullName}`;
+                    successMessage.style.display = 'block';
+                    nameInput.value = '';
+                    connectButton.innerHTML = 'SIGNED';
+                    connectButton.disabled = true;
+                    
+                    // Get signature number
+                    const event = receipt.events?.find(e => e.event === 'DeclarationSigned');
+                    if (event) {
+                        successMessage.textContent += ` | Signature #${event.args.signatureNumber}`;
+                    }
+                    
+                } catch (error) {
+                    console.error('[Dave Widget] Sign error:', error);
+                    connectButton.disabled = false;
+                    connectButton.innerHTML = 'COSIGN';
+                    
+                    if (error.code === 'ACTION_REJECTED' || error.code === 4001) {
+                        showError('Transaction cancelled');
+                    } else if (error.message?.includes('allowlisted')) {
+                        showError('Only allowlisted addresses can sign during this period');
+                    } else {
+                        showError('Transaction failed. Please try again.');
+                    }
+                }
+            }
+            
+            // Event handlers
+            connectButton.addEventListener('click', async () => {
+                if (!connected) {
+                    await connectWallet();
+                } else {
+                    await signDeclaration();
                 }
             });
             
-            window.ethereum.on('chainChanged', (chainId) => {
-                debug('Chain changed:', chainId);
-                if (connected && chainId !== BASE_CHAIN_ID) {
-                    showError('Please switch back to Base network');
-                    connected = false;
-                    connectButton.innerHTML = 'CONNECT';
-                    connectButton.disabled = false;
+            nameInput.addEventListener('keypress', async (e) => {
+                if (e.key === 'Enter' && connected) {
+                    await signDeclaration();
                 }
             });
-        }
-        
-        // Auto-focus input
-        nameInput.focus();
+            
+            // Listen for account/network changes
+            if (window.ethereum) {
+                window.ethereum.on('accountsChanged', (accounts) => {
+                    if (accounts.length === 0) {
+                        connected = false;
+                        connectButton.innerHTML = 'CONNECT';
+                        connectButton.disabled = false;
+                        infoText.textContent = '';
+                        clearMessages();
+                    } else if (connected && accounts[0].toLowerCase() !== userAddress.toLowerCase()) {
+                        connected = false;
+                        connectWallet();
+                    }
+                });
+                
+                window.ethereum.on('chainChanged', (chainId) => {
+                    if (connected && chainId !== BASE_CHAIN_ID) {
+                        showError('Please switch back to Base network');
+                        connected = false;
+                        connectButton.innerHTML = 'CONNECT';
+                        connectButton.disabled = false;
+                    }
+                });
+            }
+            
+            // Auto-focus input
+            nameInput.focus();
+        });
     </script>
 </body>
 </html>
