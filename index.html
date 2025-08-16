@@ -44,6 +44,20 @@
             opacity: 1;
         }
         
+        .debug-info {
+            background: #f0f0f0;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 12px;
+            text-align: left;
+            border-radius: 4px;
+            display: none;
+        }
+        
+        .debug-info.show {
+            display: block;
+        }
+        
         .input-wrapper {
             display: flex;
             align-items: center;
@@ -160,6 +174,7 @@
 <body>
     <div class="container">
         <div class="error-message" id="errorMessage"></div>
+        <div class="debug-info" id="debugInfo"></div>
         
         <div class="input-wrapper">
             <span class="prefix">i_am_</span>
@@ -185,6 +200,9 @@
     <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
     
     <script>
+        // Debug mode - set to false for production
+        const DEBUG = true;
+        
         // Contract details
         const CONTRACT_ADDRESS = '0xB0731E7ea189c169640Fd890E5dcE9811040D0eA';
         const BASE_CHAIN_ID = '0x2105'; // 8453 in hex
@@ -212,14 +230,28 @@
         const errorMessage = document.getElementById('errorMessage');
         const infoText = document.getElementById('infoText');
         const successMessage = document.getElementById('successMessage');
+        const debugInfo = document.getElementById('debugInfo');
+        
+        // Debug logging
+        function debug(message, data = null) {
+            console.log(`[Dave Widget] ${message}`, data || '');
+            if (DEBUG) {
+                debugInfo.classList.add('show');
+                debugInfo.innerHTML += `${new Date().toLocaleTimeString()}: ${message}<br>`;
+                if (data) {
+                    debugInfo.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                }
+            }
+        }
         
         // Error handling
         function showError(message) {
+            debug(`Error: ${message}`);
             errorMessage.textContent = message;
             errorMessage.classList.add('show');
             setTimeout(() => {
                 errorMessage.classList.remove('show');
-            }, 5000);
+            }, 7000);
         }
         
         function clearMessages() {
@@ -227,50 +259,17 @@
             successMessage.style.display = 'none';
         }
         
-        // Network handling
-        async function switchToBase() {
-            try {
-                await window.ethereum.request({
-                    method: 'wallet_switchEthereumChain',
-                    params: [{ chainId: BASE_CHAIN_ID }],
-                });
-                return true;
-            } catch (error) {
-                if (error.code === 4902) {
-                    try {
-                        await window.ethereum.request({
-                            method: 'wallet_addEthereumChain',
-                            params: [{
-                                chainId: BASE_CHAIN_ID,
-                                chainName: 'Base',
-                                nativeCurrency: {
-                                    name: 'Ether',
-                                    symbol: 'ETH',
-                                    decimals: 18
-                                },
-                                rpcUrls: ['https://mainnet.base.org'],
-                                blockExplorerUrls: ['https://basescan.org/']
-                            }],
-                        });
-                        return true;
-                    } catch (addError) {
-                        console.error('Add chain error:', addError);
-                        showError('Please add Base network to your wallet');
-                        return false;
-                    }
-                } else {
-                    console.error('Switch chain error:', error);
-                    showError('Please switch to Base network');
-                    return false;
-                }
-            }
-        }
+        // Check environment
+        debug('Widget loaded');
+        debug('Ethereum available:', typeof window.ethereum !== 'undefined');
         
         // Connect wallet
         async function connectWallet() {
             try {
                 clearMessages();
+                debug('Starting connection...');
                 
+                // Check for wallet
                 if (typeof window.ethereum === 'undefined') {
                     showError('Please install MetaMask or another Web3 wallet');
                     return;
@@ -279,43 +278,113 @@
                 connectButton.disabled = true;
                 connectButton.innerHTML = 'CONNECTING...';
                 
-                // Request accounts
-                const accounts = await window.ethereum.request({ 
-                    method: 'eth_requestAccounts' 
-                });
+                // Request accounts with error handling
+                let accounts;
+                try {
+                    debug('Requesting accounts...');
+                    accounts = await window.ethereum.request({ 
+                        method: 'eth_requestAccounts' 
+                    });
+                    debug('Accounts received:', accounts);
+                } catch (err) {
+                    debug('Account request failed:', err);
+                    if (err.code === -32002) {
+                        showError('Please unlock MetaMask');
+                    } else if (err.code === 4001) {
+                        showError('Connection rejected');
+                    } else {
+                        showError('Failed to get accounts');
+                    }
+                    connectButton.disabled = false;
+                    connectButton.innerHTML = 'CONNECT';
+                    return;
+                }
                 
                 if (!accounts || accounts.length === 0) {
                     throw new Error('No accounts found');
                 }
                 
-                // Switch to Base
-                const switched = await switchToBase();
-                if (!switched) {
-                    connectButton.disabled = false;
-                    connectButton.innerHTML = 'CONNECT';
-                    return;
+                // Get current chain
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                debug('Current chain:', chainId);
+                
+                // Switch to Base if needed
+                if (chainId !== BASE_CHAIN_ID) {
+                    debug('Switching to Base...');
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: BASE_CHAIN_ID }],
+                        });
+                        debug('Switched to Base');
+                    } catch (switchError) {
+                        debug('Switch error:', switchError);
+                        if (switchError.code === 4902) {
+                            debug('Adding Base network...');
+                            try {
+                                await window.ethereum.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: BASE_CHAIN_ID,
+                                        chainName: 'Base',
+                                        nativeCurrency: {
+                                            name: 'Ether',
+                                            symbol: 'ETH',
+                                            decimals: 18
+                                        },
+                                        rpcUrls: ['https://mainnet.base.org'],
+                                        blockExplorerUrls: ['https://basescan.org/']
+                                    }],
+                                });
+                                debug('Base network added');
+                            } catch (addError) {
+                                debug('Add network error:', addError);
+                                showError('Please add Base network to your wallet');
+                                connectButton.disabled = false;
+                                connectButton.innerHTML = 'CONNECT';
+                                return;
+                            }
+                        } else {
+                            showError('Please switch to Base network');
+                            connectButton.disabled = false;
+                            connectButton.innerHTML = 'CONNECT';
+                            return;
+                        }
+                    }
                 }
                 
                 // Setup provider
+                debug('Setting up provider...');
                 provider = new ethers.providers.Web3Provider(window.ethereum);
                 const network = await provider.getNetwork();
+                debug('Network:', network);
                 
                 if (network.chainId !== BASE_CHAIN_ID_DEC) {
-                    throw new Error('Wrong network');
+                    throw new Error('Wrong network after switch');
                 }
                 
                 signer = provider.getSigner();
                 userAddress = await signer.getAddress();
+                debug('User address:', userAddress);
+                
+                // Setup contract
                 contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+                debug('Contract initialized');
                 
                 // Check if already signed
-                const hasSigned = await contract.hasSigned(userAddress);
-                if (hasSigned) {
-                    const signature = await contract.signatureByAddress(userAddress);
-                    showError(`Already signed as: ${signature}`);
-                    connectButton.disabled = false;
-                    connectButton.innerHTML = 'CONNECT';
-                    return;
+                try {
+                    const hasSigned = await contract.hasSigned(userAddress);
+                    debug('Has signed:', hasSigned);
+                    
+                    if (hasSigned) {
+                        const signature = await contract.signatureByAddress(userAddress);
+                        showError(`Already signed as: ${signature}`);
+                        connectButton.disabled = false;
+                        connectButton.innerHTML = 'CONNECT';
+                        return;
+                    }
+                } catch (err) {
+                    debug('Error checking signature:', err);
                 }
                 
                 // Success
@@ -323,6 +392,7 @@
                 connectButton.innerHTML = 'COSIGN';
                 connectButton.disabled = false;
                 infoText.textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+                debug('Connection successful!');
                 
                 // Check allowlist
                 try {
@@ -336,14 +406,14 @@
                         }
                     }
                 } catch (e) {
-                    console.error('Allowlist check error:', e);
+                    debug('Allowlist check error:', e);
                 }
                 
             } catch (error) {
-                console.error('Connection error:', error);
+                debug('Connection error:', error);
                 connectButton.disabled = false;
                 connectButton.innerHTML = 'CONNECT';
-                showError('Connection failed. Please try again.');
+                showError('Connection failed. Check console for details.');
             }
         }
         
@@ -351,6 +421,7 @@
         async function signDeclaration() {
             try {
                 clearMessages();
+                debug('Starting signature process...');
                 
                 const name = nameInput.value.trim().toLowerCase();
                 
@@ -372,6 +443,8 @@
                 
                 // Check if name exists
                 const fullName = `i_am_${name}_dave`;
+                debug('Checking name availability:', fullName);
+                
                 const nameExists = await contract.nameExists(fullName);
                 if (nameExists) {
                     showError('This DAVE name is already taken');
@@ -382,10 +455,14 @@
                 connectButton.disabled = true;
                 connectButton.innerHTML = 'SIGNING<span class="loading-spinner"></span>';
                 
+                debug('Sending transaction...');
                 const tx = await contract.cosignDeclaration(name);
+                debug('Transaction sent:', tx.hash);
+                
                 connectButton.innerHTML = 'CONFIRMING<span class="loading-spinner"></span>';
                 
                 const receipt = await tx.wait();
+                debug('Transaction confirmed:', receipt);
                 
                 // Success
                 successMessage.textContent = `Successfully signed as: ${fullName}`;
@@ -401,7 +478,7 @@
                 }
                 
             } catch (error) {
-                console.error('Sign error:', error);
+                debug('Sign error:', error);
                 connectButton.disabled = false;
                 connectButton.innerHTML = 'COSIGN';
                 
@@ -410,7 +487,7 @@
                 } else if (error.message?.includes('allowlisted')) {
                     showError('Only allowlisted addresses can sign during this period');
                 } else {
-                    showError('Transaction failed. Please try again.');
+                    showError('Transaction failed. Check console for details.');
                 }
             }
         }
@@ -433,6 +510,7 @@
         // Listen for account/network changes
         if (window.ethereum) {
             window.ethereum.on('accountsChanged', (accounts) => {
+                debug('Accounts changed:', accounts);
                 if (accounts.length === 0) {
                     // Disconnected
                     connected = false;
@@ -448,6 +526,7 @@
             });
             
             window.ethereum.on('chainChanged', (chainId) => {
+                debug('Chain changed:', chainId);
                 if (connected && chainId !== BASE_CHAIN_ID) {
                     showError('Please switch back to Base network');
                     connected = false;
